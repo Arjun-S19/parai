@@ -3,6 +3,7 @@ matplotlib
 pandas
 scikit-learn
 torch
+torchcodec
 torchaudio
 librosa
 tqdm

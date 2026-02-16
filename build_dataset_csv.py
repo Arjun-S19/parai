@@ -1,9 +1,10 @@
 import pathlib
 import random
 import pandas as pd
+import config
 
 # dir paths
-PROJECT_ROOT = pathlib.Path(__file__).resolve().parent
+PROJECT_ROOT = config.project_root
 DRUM_SAMPLES_PATH = PROJECT_ROOT / "drum_samples"
 OUTPUT_PATH = PROJECT_ROOT / "datasets"
 
@@ -33,6 +34,7 @@ def infer_label(root: pathlib.Path, file_path: pathlib.Path) -> str | None:
     Example:
         drum_samples/Kick/sound1.wav -> 'kick'
     """
+
     rel = file_path.relative_to(root)
 
     if len(rel.parts) == 0:
@@ -47,6 +49,7 @@ def collect_samples(root: pathlib.Path) -> list[tuple[str, str]]:
     """
     Go through drum_samples dir and get (filepath, label) pairs for valid files
     """
+
     samples = []
 
     for path in root.rglob("*"):
@@ -72,6 +75,7 @@ def split_dataset(samples: list[tuple[str, str]],
     """
     Shuffle and split dataset into train/validate/test according ratios defined by constants
     """
+
     random.seed(RANDOM_SEED)
     random.shuffle(samples)
 
@@ -90,6 +94,7 @@ def save_csv(samples: list[tuple[str, str]], path: pathlib.Path) -> None:
     """
     Save a list of (path, label) tuples into a CSV file
     """
+    
     df = pd.DataFrame(samples, columns = ["path", "label"])
     df.to_csv(path, index = False)
 
