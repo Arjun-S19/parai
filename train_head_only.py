@@ -14,7 +14,7 @@ from models.model import DrumClassifier
 
 def compute_class_weights(csv_path, num_classes, mode = "inv", max_weight = None):
     """
-    Compute class weights to reduce bias from class imbalance.
+    Compute class weights to reduce bias from class imbalance
     """
 
     counts = [0] * num_classes

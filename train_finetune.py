@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 import config as config
 from data import DrumDataset
 from metrics import accuracy, per_class_accuracy
@@ -114,6 +114,24 @@ def train_epoch(model, loader, optimizer, criterion, device):
 
     return total_loss / len(loader), total_acc / len(loader)
 
+def build_weighted_sampler(dataset: DrumDataset) -> WeightedRandomSampler:
+    """
+    Build a per-sample weighted sampler from inverse class frequency
+    """
+
+    labels = dataset.df["label"].tolist()
+    counts: dict[str, int] = {}
+    for lbl in labels:
+        counts[lbl] = counts.get(lbl, 0) + 1
+
+    sample_weights = [1.0 / counts[lbl] for lbl in labels]
+    sample_weights_t = torch.tensor(sample_weights, dtype = torch.double)
+    return WeightedRandomSampler(
+        weights = sample_weights_t,
+        num_samples = len(sample_weights),
+        replacement = True,
+    )
+
 def eval_epoch(model, loader, criterion, device):
     """
     Evaluate model on a loader and return metrics
@@ -210,6 +228,33 @@ def parse_args():
         default = 2.5,
         help = "Optional cap on class weights",
     )
+    parser.add_argument(
+        "--balanced-sampling",
+        action = "store_true",
+        help = "Use WeightedRandomSampler to upsample minority classes",
+    )
+    parser.add_argument(
+        "--targeted-augment",
+        action = "store_true",
+        help = "Apply light waveform augmentation to snare and clap only",
+    )
+    parser.add_argument(
+        "--targeted-augment-prob",
+        type = float,
+        default = 0.6,
+        help = "Probability of applying targeted augmentation per eligible sample",
+    )
+    parser.add_argument(
+        "--label-smoothing",
+        type = float,
+        default = 0.0,
+        help = "Label smoothing factor for CrossEntropyLoss",
+    )
+    parser.add_argument(
+        "--run-name",
+        default = None,
+        help = "Optional run folder name under runs/ (defaults to <encoder>_finetune_lastblock)",
+    )
     return parser.parse_args()
 
 def main():
@@ -217,17 +262,30 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    run_dir = Path("runs") / f"{args.encoder}_finetune_lastblock"
+    run_name = args.run_name or f"{args.encoder}_finetune_lastblock"
+    run_dir = Path("runs") / run_name
     run_dir.mkdir(parents = True, exist_ok = True)
 
     train_csv = "datasets/1_train.csv"
     val_csv = "datasets/2_validate.csv"
 
-    train_ds = DrumDataset(train_csv)
+    train_ds = DrumDataset(
+        train_csv,
+        augment = args.targeted_augment,
+        augment_labels = {"snare", "clap"},
+        augment_prob = args.targeted_augment_prob,
+    )
     val_ds = DrumDataset(val_csv)
 
-    train_loader = DataLoader(train_ds, batch_size = args.batch_size, shuffle = True)
+    if args.balanced_sampling:
+        train_sampler = build_weighted_sampler(train_ds)
+        train_loader = DataLoader(train_ds, batch_size = args.batch_size, sampler = train_sampler)
+    else:
+        train_loader = DataLoader(train_ds, batch_size = args.batch_size, shuffle = True)
+
     val_loader = DataLoader(val_ds, batch_size = args.batch_size, shuffle = False)
+    # train eval pass to monitor train acc without specaugment and dropout effects
+    train_eval_loader = DataLoader(train_ds, batch_size = args.batch_size, shuffle = False)
 
     encoder_ckpt_path = config.project_root / config.encoders[args.encoder]
 
@@ -272,9 +330,9 @@ def main():
         ).to(device)
 
         print("Using weighted loss with class weights:", class_weights.detach().cpu().tolist())
-        criterion = nn.CrossEntropyLoss(weight = class_weights)
+        criterion = nn.CrossEntropyLoss(weight = class_weights, label_smoothing = args.label_smoothing)
     else:
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(label_smoothing = args.label_smoothing)
 
     best_val_acc = 0.0
     history = []
@@ -288,18 +346,25 @@ def main():
             model, val_loader, criterion, device
         )
 
+        train_eval_loss, train_eval_acc, _ = eval_epoch(
+            model, train_eval_loader, criterion, device
+        )
+
         history.append({
             "epoch": epoch,
             "train_loss": train_loss,
             "train_acc": train_acc,
             "val_loss": val_loss,
             "val_acc": val_acc,
+            "train_eval_loss": train_eval_loss,
+            "train_eval_acc": train_eval_acc,
             "per_class": per_class,
         })
 
         print(
             f"epoch {epoch:02d} | "
             f"train acc {train_acc:.3f} | "
+            f"train eval acc {train_eval_acc:.3f} | "
             f"val acc {val_acc:.3f}"
         )
 
@@ -323,6 +388,11 @@ def main():
             "weighted_loss": args.weighted_loss,
             "weight_mode": args.weight_mode,
             "max_weight": args.max_weight,
+            "balanced_sampling": args.balanced_sampling,
+            "targeted_augment": args.targeted_augment,
+            "targeted_augment_prob": args.targeted_augment_prob,
+            "label_smoothing": args.label_smoothing,
+            "run_name": run_name,
             "init_checkpoint": args.init_checkpoint,
             "unfrozen_block": "conv_block4",
         }, f, indent = 2)
