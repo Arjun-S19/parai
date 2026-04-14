@@ -40,9 +40,10 @@ class DrumDataset(Dataset):
         
         row = self.df.iloc[idx]
         label = row["label"]
+        audio_path = str((config.project_root / str(row["path"])).resolve())
 
         # load and normalize audio so model always sees fixed shape
-        x = normalize_single(row["path"])
+        x = normalize_single(audio_path)
 
         if self.augment and label in self.augment_labels and random.random() < self.augment_prob:
             x = self._augment_waveform(x)
